@@ -1,1 +1,4 @@
-# No external packages needed for Part 1
+# System Requirements:
+# - GCC or MinGW (for Windows)
+# - make (GNU Make for building)
+# - POSIX sockets (on Linux/macOS) or Winsock2 (on Windows)
