@@ -12,11 +12,14 @@ This repository contains the **Day-1 version** of a Peer-to-Peer (P2P) Encrypted
 
 ## **Project Structure**
 p2p-chat-system/
+│
 ├── src/
-│ ├── main.c # Main C source file
-│ ├── Makefile # For building using GNU Make
-├── README.md
-└── .gitignore
+│   └── p2p_chat.c        # Single C source file containing everything (Day 1)
+│
+├── Makefile              # For building on Linux/Mac (optional on Windows)
+├── README.md             # Project documentation (this file)
+└── .gitignore            # Ignore build outputs
+
 
 ---
 
