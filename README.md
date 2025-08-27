@@ -1,25 +1,28 @@
-# 🧑‍💻 P2P Chat System (Part 1)
+# P2P Encrypted Chat System (Day 1 – C Implementation)
 
-A simple peer-to-peer (P2P) chat application using TCP sockets and multithreading in Python.
+This repository contains the **Day-1 version** of a Peer-to-Peer (P2P) Encrypted Chat System implemented in **C**.  
 
-## ✅ Features
+### Features (Day 1)
+- Direct peer-to-peer connection over TCP sockets  
+- Basic XOR-based message encryption (demo only — not secure for production)  
+- Cross-platform support (tested on Windows using MinGW-w64)  
+- Lightweight, single-file implementation  
 
-- Run as **server** or **client**
-- Real-time **2-way chat**
-- Uses **multithreading** for sending/receiving
-- Includes **timestamped messages**
-- Input validation (IP, port)
-- Prevents empty messages
-- Logs all chat to `logs/chatlog.txt`
+---
 
-## 📦 Requirements
+## **Project Structure**
+p2p-chat-system/
+├── src/
+│ ├── main.c # Main C source file
+│ ├── Makefile # For building using GNU Make
+├── README.md
+└── .gitignore
 
-- Python 3.6+
-- No external packages needed
+---
 
-## 🚀 How to Run
+## **Prerequisites**
 
-### Step 1: Navigate to the project
-
-```bash
-cd p2p-chat-system/src
+- **GCC (MinGW-w64)** for compiling C code  
+  Check installation:
+  ```bash
+  gcc --version
