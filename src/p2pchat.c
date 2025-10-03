@@ -531,6 +531,7 @@ static sock_t start_client(const char *peer_ip, int peer_port) {
         }
 
 
+
         /* Display regular message */
         char ts[16];
         timestamp_now(ts, sizeof(ts));
