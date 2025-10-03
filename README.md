@@ -24,8 +24,8 @@ p2p-chat-system/
 │    ├── p2pchat.c       # Main program: server/client flow, threads, and I/O
 │    ├── encryption.c    # AES encryption/decryption functions
 │    ├── encryption.h    # Header for encryption functions
-│    ├── udp_chat.c # UDP chat implementation
-│    ├── udp_chat.h # Header for UDP chat
+│    ├── udp_chat.c      # UDP chat implementation
+│    ├── udp_chat.h      # Header for UDP chat
 │    ├── utils.c         # Utility functions (logging, performance tracking, parsing)
 │    └── utils.h         # Header for utility functions
 │
