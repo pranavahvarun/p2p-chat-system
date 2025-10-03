@@ -41,19 +41,16 @@ const char *SECRET_KEY = "admin123";
 #define TIMEOUT_MS 2000         // Timeout for retransmission
 #define MAX_UNACKED_PACKETS 64  // Max number of messages we can have in flight
 
-// Defines the type of packet being sent
-
 typedef enum {
-    PKT_MSG, // "PKT" for Packet
+    PKT_MSG,
     PKT_ACK,
     PKT_FIN
 } PacketType;
 
-// The structure of every packet we send over UDP
 typedef struct {
     PacketType type;
     uint32_t   seq_num;
-    int        payload_len; // Length of the actual data in the payload
+    int        payload_len;
     char       payload[PAYLOAD_SIZE];
 } Packet;
 
@@ -63,21 +60,17 @@ static sock_t sock = sock_invalid;
 static struct sockaddr_in peer_addr;
 static volatile int peer_addr_known = 0;
 
-// State for our reliability protocol
 static uint32_t next_seq_num_to_send = 0;
 static uint32_t expected_seq_num_to_recv = 0;
 
-// Buffer for messages sent but not yet acknowledged
 static Packet unacked_packets[MAX_UNACKED_PACKETS];
 static uint64_t sent_time_ms[MAX_UNACKED_PACKETS];
 static int unacked_count = 0;
 
-// Mutexes to protect shared resources
 static mutex_t peer_addr_mutex;
 static mutex_t unacked_mutex;
 
 /* -------------------- CROSS-PLATFORM UTILITY FUNCTIONS -------------------- */
-
 static void mutex_init(mutex_t *m) {
 #ifdef _WIN32
     *m = CreateMutex(NULL, FALSE, NULL);
@@ -110,9 +103,7 @@ static void mutex_unlock(mutex_t *m) {
 
 static void trim_newline(char *s) { if (!s) return; size_t n = strlen(s); while (n > 0 && (s[n-1] == '\n' || s[n-1] == '\r')) s[--n] = '\0'; }
 
-/* -------------------- SENDER, RECEIVER, AND RETRANSMITTER THREADS -------------------- */
-
-// Thread to handle receiving packets
+/* -------------------- RECEIVER -------------------- */
 #ifdef _WIN32
 DWORD WINAPI receiver_fn(LPVOID arg)
 #else
@@ -127,7 +118,6 @@ void *receiver_fn(void *arg)
         int n = recvfrom(sock, (char*)&rx_packet, sizeof(Packet), 0, (struct sockaddr*)&sender_addr, &sender_len);
         if (n <= 0) continue;
 
-        // If this is the first packet from our peer, store their address
         if (!peer_addr_known) {
             mutex_lock(&peer_addr_mutex);
             memcpy(&peer_addr, &sender_addr, sizeof(peer_addr));
@@ -146,7 +136,7 @@ void *receiver_fn(void *arg)
                 ack_packet.type = PKT_ACK;
                 ack_packet.seq_num = rx_packet.seq_num;
                 sendto(sock, (char*)&ack_packet, sizeof(Packet), 0, (struct sockaddr*)&peer_addr, sizeof(peer_addr));
-                
+
                 if (rx_packet.seq_num == expected_seq_num_to_recv) {
                     unsigned char decrypted_payload[PAYLOAD_SIZE];
                     int dec_len = decrypt_message((unsigned char*)rx_packet.payload, rx_packet.payload_len, (unsigned char*)SECRET_KEY, decrypted_payload, PAYLOAD_SIZE);
@@ -155,7 +145,7 @@ void *receiver_fn(void *arg)
                         printf("\nPeer: %s\n", (char*)decrypted_payload);
                     }
                     expected_seq_num_to_recv++;
-                } // Discard duplicate or out-of-order packets in this simple implementation
+                }
                 break;
             }
             case PKT_ACK: {
@@ -163,7 +153,12 @@ void *receiver_fn(void *arg)
                 for (int i = 0; i < unacked_count; i++) {
                     if (unacked_packets[i].seq_num == rx_packet.seq_num) {
                         printf("[INFO] ACK #%u received.\n", rx_packet.seq_num);
-                        // Remove from list by replacing with the last element
+                        
+                        // --- Perf Integration ---
+                        char decrypted_ack[64];
+                        snprintf(decrypted_ack, sizeof(decrypted_ack), "ACK:%u", rx_packet.seq_num);
+                        perf_handle_ack(decrypted_ack);
+                        
                         unacked_packets[i] = unacked_packets[unacked_count - 1];
                         sent_time_ms[i] = sent_time_ms[unacked_count - 1];
                         unacked_count--;
@@ -179,22 +174,19 @@ void *receiver_fn(void *arg)
                 break;
             }
         }
-        if (running) {
-             printf("You: ");
-             fflush(stdout);
-        }
+        if (running) { printf("You: "); fflush(stdout); }
     }
     return 0;
 }
 
-// Thread to handle sending user input
+/* -------------------- SENDER -------------------- */
 #ifdef _WIN32
 DWORD WINAPI sender_fn(LPVOID arg)
 #else
 void *sender_fn(void *arg)
 #endif
 {
-    char line[PAYLOAD_SIZE - 64]; // Leave buffer for encryption overhead
+    char line[PAYLOAD_SIZE - 64];
     while (running) {
         printf("You: ");
         fflush(stdout);
@@ -206,15 +198,27 @@ void *sender_fn(void *arg)
         if (!running) break;
         if (strlen(line) == 0) continue;
 
+        // --- Perf Commands ---
+        if (strcmp(line, "stats") == 0) {
+            perf_display_stats();
+            continue;
+        }
+        if (strcmp(line, "reset") == 0) {
+            perf_reset_stats();
+            continue;
+        }
+
         if (!peer_addr_known) {
             printf("[WARN] Peer address not known yet. Message not sent.\n");
             continue;
         }
 
+        // Track latency
+        perf_add_pending_message(line);
+
         Packet tx_packet;
         tx_packet.type = PKT_MSG;
 
-        // Encrypt the payload
         unsigned char encrypted_payload[PAYLOAD_SIZE];
         int enc_len = encrypt_message((unsigned char*)line, strlen(line), (unsigned char*)SECRET_KEY, encrypted_payload, PAYLOAD_SIZE);
         if (enc_len < 0) {
@@ -235,14 +239,14 @@ void *sender_fn(void *arg)
         sent_time_ms[unacked_count] = get_time_ms();
         unacked_count++;
         mutex_unlock(&unacked_mutex);
-        
+
         printf("[INFO] Sending MSG #%u...\n", tx_packet.seq_num);
         sendto(sock, (char*)&tx_packet, sizeof(Packet), 0, (struct sockaddr*)&peer_addr, sizeof(peer_addr));
     }
     return 0;
 }
 
-// Thread to handle retransmitting lost packets
+/* -------------------- RETRANSMITTER -------------------- */
 #ifdef _WIN32
 DWORD WINAPI retransmitter_fn(LPVOID arg)
 #else
@@ -250,14 +254,18 @@ void *retransmitter_fn(void *arg)
 #endif
 {
     while(running) {
-        Sleep(100); // Check for timeouts every 100ms
+#ifdef _WIN32
+        Sleep(100);
+#else
+        usleep(100 * 1000);
+#endif
         mutex_lock(&unacked_mutex);
         uint64_t now = get_time_ms();
         for (int i = 0; i < unacked_count; i++) {
             if (now - sent_time_ms[i] > TIMEOUT_MS) {
                 printf("[TIMEOUT] Retrying MSG #%u...\n", unacked_packets[i].seq_num);
                 sendto(sock, (char*)&unacked_packets[i], sizeof(Packet), 0, (struct sockaddr*)&peer_addr, sizeof(peer_addr));
-                sent_time_ms[i] = now; // Update send time
+                sent_time_ms[i] = now;
             }
         }
         mutex_unlock(&unacked_mutex);
@@ -265,8 +273,7 @@ void *retransmitter_fn(void *arg)
     return 0;
 }
 
-
-/* -------------------- MAIN APPLICATION LOGIC -------------------- */
+/* -------------------- MAIN -------------------- */
 int main(void) {
 #ifdef _WIN32
     WSADATA wsa;
@@ -317,25 +324,26 @@ int main(void) {
         peer_addr_known = 1;
         printf("[INFO] Client ready. Type a message to begin.\n");
     }
-    
+
+    // --- Perf Initialization ---
+    perf_init();
+
     // Start all threads
     thread_t rx_thread = start_thread(receiver_fn, NULL);
     thread_t tx_thread = start_thread(sender_fn, NULL);
     thread_t rt_thread = start_thread(retransmitter_fn, NULL);
 
-    // Wait for threads to complete
     join_thread(rx_thread);
     join_thread(tx_thread);
     join_thread(rt_thread);
 
-    // Cleanup
     if (peer_addr_known) {
         Packet fin_packet;
         fin_packet.type = PKT_FIN;
         fin_packet.seq_num = next_seq_num_to_send;
         sendto(sock, (char*)&fin_packet, sizeof(Packet), 0, (struct sockaddr*)&peer_addr, sizeof(peer_addr));
     }
-    
+
     close_socket(sock);
 #ifdef _WIN32
     WSACleanup();
