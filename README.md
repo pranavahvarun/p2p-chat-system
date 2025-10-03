@@ -18,15 +18,17 @@ This repository contains a **cross-platform P2P Encrypted Chat System** implemen
 p2p-chat-system/
 │
 ├── src/
-│   └── p2pchat.c          # Main C source file for chat system
+│    ├── p2pchat.c # Main program: server/client flow, threads, and I/O
+│    ├── encryption.c # AES encryption/decryption functions
+│    ├── encryption.h # Header for encryption functions
+│    ├── utils.c # Utility functions (logging, performance tracking, parsing)
+│    └── utils.h # Header for utility functions
 │
-├── encryption.c           # Encryption routines (AES-256-CBC)
-├── encryption.h           # Encryption header
-├── utils.c                # Utility functions (performance tracking, logging)
-├── utils.h                # Utility header
-├── Makefile               # For building on Linux/macOS
-├── README.md              # Project documentation (this file)
-└── .gitignore             # Ignore build outputs
+├── logs/ # Automatically created at runtime
+│    └── chatlog.txt # Thread-safe log of all messages
+│
+├── README.md # Project documentation (this file)
+└── .gitignore # Ignore build outputs and logs
 ```
 ---
 
