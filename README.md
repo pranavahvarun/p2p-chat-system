@@ -1,115 +1,118 @@
-# P2P Encrypted Chat System
+# P2P Encrypted Chat System (C Version)
 
-This repository contains the initial version of a Peer-to-Peer (P2P) Encrypted Chat System implemented in **C**.
+This repository contains a **cross-platform P2P Encrypted Chat System** implemented in **C**.
 
-It supports **cross-platform TCP communication**, basic AES-256-CBC encryption, logging, and performance monitoring for message latency.
+### Features
 
----
-
-## **Features**
-
-* Peer-to-peer connection over **TCP sockets**
-* **AES-256-CBC encryption** for secure messaging
-* Displays **own IP automatically** (client)
-* Cross-platform support (**Windows**, **Linux**, **macOS**)
-* Threaded architecture for **sending/receiving messages concurrently**
-* Basic **performance/latency monitoring** with logs
-
-> ⚠️ **Note**: This version is a prototype; encryption and performance monitoring are basic and intended for learning/testing.
+* Direct peer-to-peer connection over **TCP sockets**
+* AES-256-CBC encryption for secure messaging
+* Cross-platform support (Windows using MinGW, Linux, macOS)
+* LAN IP detection for easy connection
+* Latency measurement and performance monitoring
+* Thread-safe logging of chat messages
 
 ---
 
 ## **Project Structure**
-
 ```
 p2p-chat-system/
 │
 ├── src/
-│   └── p2pchat.c          # Main C source file containing all logic
-├── encryption.h/c         # AES encryption utilities
-├── utils.h/c              # Utility functions (logging, networking helpers)
-├── Makefile               # Optional build script for Linux/macOS
-├── README.md              # Project documentation
+│   └── p2pchat.c          # Main C source file for chat system
+│
+├── encryption.c           # Encryption routines (AES-256-CBC)
+├── encryption.h           # Encryption header
+├── utils.c                # Utility functions (performance tracking, logging)
+├── utils.h                # Utility header
+├── Makefile               # For building on Linux/macOS
+├── README.md              # Project documentation (this file)
 └── .gitignore             # Ignore build outputs
 ```
-
 ---
 
 ## **Prerequisites**
 
-* **C Compiler**
-
-  * Linux/macOS: `gcc`
-  * Windows: `MinGW-w64`
+* **GCC (MinGW-w64)** for Windows or Linux/macOS
+  Check installation:
 
   ```bash
   gcc --version
   ```
-
-* **OpenSSL development library** (for encryption)
+* **OpenSSL library** (for AES encryption)
+  Install on Linux/macOS:
 
   ```bash
-  # Linux
-  sudo apt install libssl-dev
-
-  # macOS
-  brew install openssl
+  sudo apt install libssl-dev   # Debian/Ubuntu
+  brew install openssl          # macOS
   ```
-
-* **Windows**: Ensure `libcrypto` and `libssl` are linked when building
 
 ---
 
-## **Building**
+## **Build Instructions**
 
 ### Linux/macOS
 
 ```bash
 cd src
-gcc p2pchat.c encryption.c utils.c -o p2pchat -lcrypto -lssl -lpthread
+gcc -pthread p2pchat.c encryption.c utils.c -o p2pchat -lcrypto -lssl
 ```
 
 ### Windows (MinGW)
 
 ```bash
+cd src
 gcc p2pchat.c encryption.c utils.c -o p2pchat.exe -lws2_32 -lcrypto -lssl
 ```
 
 ---
 
-## **Running the Chat**
+## **Usage**
 
-1. **Start the server**
+1. Run the program:
 
-   ```bash
-   ./p2pchat
-   ```
+```bash
+./p2pchat        # Linux/macOS
+p2pchat.exe      # Windows
+```
 
-   * Choose `server` mode
-   * Enter the port to listen on
+2. Choose mode: `server` or `client`.
 
-2. **Start the client**
+### **Server**
 
-   ```bash
-   ./p2pchat
-   ```
+* Enter port to listen on.
+* Your LAN IP will be displayed automatically.
+* Wait for a peer to connect.
 
-   * Choose `client` mode
-   * The program auto-detects your IP and prompts for server port
-   * It connects automatically to `127.0.0.1` (localhost)
+### **Client**
 
-3. **Commands in chat**
+* Your own IP will be displayed automatically.
+* Enter the **server’s LAN IP** and port to connect.
 
-   * `stats` → display performance statistics
-   * `reset` → reset statistics
+---
+
+## **Commands During Chat**
+
+* `stats` — Show current latency/performance statistics
+* `reset` — Reset performance statistics
+
+---
+
+## **Logging**
+
+* Chat messages are logged in `../logs/chatlog.txt`
+* Logging is **thread-safe** and includes timestamps.
 
 ---
 
 ## **Notes**
 
-* Only **single peer-to-peer connections** are supported
-* Encryption is **AES-256-CBC** with a hardcoded password (for demonstration only)
-* Logs are saved to `../logs/chatlog.txt`
-* Currently uses **localhost** only; LAN mode will be implemented in future versions
+* Ensure both peers are on the **same LAN** for easy connection.
+* This version removes the need to hardcode IPs — LAN IP detection is automatic.
+* For testing on the same machine, you can use `127.0.0.1` as server IP.
 
 ---
+
+## **License**
+
+This project is MIT licensed. See `LICENSE` file for details.
+
