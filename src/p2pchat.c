@@ -172,6 +172,84 @@ static void log_message(const char *fmt, ...) {
     mutex_unlock(&log_mutex);
 }
 
+/* Save chat history to a separate file */
+static void save_history(const char *who, int seq, const char *msg) {
+    ensure_logs_dir();
+    mutex_lock(&log_mutex);
+    FILE *f = fopen("../logs/chat_history.txt", "a");
+    if (!f) {
+        perror("[ERROR] fopen history");
+        mutex_unlock(&log_mutex);
+        return;
+    }
+    time_t now = time(NULL);
+    char ts[32];
+    strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", localtime(&now));
+    fprintf(f, "[%s] %s (seq=%d): %s\n", ts, who, seq, msg);
+    fclose(f);
+    mutex_unlock(&log_mutex);
+}
+
+void view_chat_history() {
+    FILE *fp = fopen("../logs/chat_history.txt", "r");
+    if (!fp) {
+        printf("No chat history found.\n");
+        return;
+    }
+
+    char line[1024];
+    printf("\n===== Chat History =====\n");
+    while (fgets(line, sizeof(line), fp)) {
+        printf("%s", line);
+    }
+    printf("========================\n\n");
+
+    fclose(fp);
+}
+
+static void ensure_downloads_dir(void) {
+    mkdir_path("../downloads");
+}
+
+void send_file(sock_t sock, const char *filepath, unsigned char *key) {
+    FILE *f = fopen(filepath, "rb");
+    if (!f) {
+        perror("[ERROR] fopen");
+        return;
+    }
+
+    // Get file size
+    fseek(f, 0, SEEK_END);
+    long filesize = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    // Send a header first: "FILE:<filename>:<size>"
+    char filename[256];
+    const char *slash = strrchr(filepath, '/');
+    if (!slash) slash = strrchr(filepath, '\\');
+    if (slash) strcpy(filename, slash + 1);
+    else strcpy(filename, filepath);
+
+    char header[512];
+    snprintf(header, sizeof(header), "FILE:%s:%ld", filename, filesize);
+    unsigned char encrypted_header[SEND_BUF];
+    int enc_len = encrypt_message((unsigned char*)header, strlen(header), key, encrypted_header, SEND_BUF);
+    send(sock, (const char*)encrypted_header, enc_len, 0);
+
+    // Send file in chunks
+    unsigned char buf[1024];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+        unsigned char enc_chunk[2048];
+        int enc_chunk_len = encrypt_message(buf, n, key, enc_chunk, sizeof(enc_chunk));
+        send(sock, (const char*)enc_chunk, enc_chunk_len, 0);
+    }
+
+    fclose(f);
+    printf("[INFO] File '%s' sent successfully.\n", filename);
+}
+
+
 /* portable sleep ms */
 static void sleep_ms(int ms) {
 #ifdef _WIN32
@@ -405,7 +483,54 @@ static sock_t start_client(const char *peer_ip, int peer_port) {
             /* This was an ACK, don't display as regular message */
             continue;
         }
-        
+
+        if (strncmp(clean_message, "FILE:", 5) == 0) {
+            // Parse header
+            char fname[256];
+            long fsize;
+            sscanf(clean_message, "FILE:%255[^:]:%ld", fname, &fsize);
+
+            // Ensure downloads directory exists
+            #ifdef _WIN32
+                _mkdir("../downloads");
+            #else
+                mkdir("../downloads", 0755);
+            #endif
+
+            // Build full path under ../downloads
+            char filepath[512];
+            snprintf(filepath, sizeof(filepath), "../downloads/%s", fname);
+
+            FILE *f = fopen(filepath, "wb"); // save in downloads
+            if (!f) {
+                perror("[ERROR] fopen recv file");
+                continue;
+            }
+
+            long received = 0;
+            while (received < fsize) {
+                unsigned char chunk[RECV_BUF];
+                int n = recv(conn_sock, chunk, sizeof(chunk), 0);
+                if (n <= 0) break;
+
+                unsigned char dec_chunk[RECV_BUF];
+                int dec_len = decrypt_message(chunk, n, derived_key, dec_chunk, sizeof(dec_chunk));
+                if (dec_len < 0) {
+                    fprintf(stderr, "[ERROR] Failed to decrypt chunk.\n");
+                    break;
+                }
+
+                fwrite(dec_chunk, 1, dec_len, f);
+                received += dec_len;
+            }
+
+            fclose(f);
+            printf("\n[INFO] Received file '%s' (%ld bytes) -> saved in ../downloads\nYou: ", fname, fsize);
+            fflush(stdout);
+            continue;
+        }
+
+
         /* Display regular message */
         char ts[16];
         timestamp_now(ts, sizeof(ts));
@@ -631,6 +756,16 @@ int main(void) {
             perf_reset_stats();
             continue;
         }
+        if (strcmp(line, "/history") == 0) {
+            view_chat_history();
+            continue; // don’t send this as a chat message
+        }
+        if (strncmp(line, "/sendfile ", 10) == 0) {
+            const char *filepath = line + 10;  // Skip "/sendfile "
+            send_file(conn_sock, filepath, derived_key);
+            continue; // Don't send as chat
+        }
+
 
         /* Format message with sequence number for tracking */
         char formatted_msg[SEND_BUF];
@@ -667,10 +802,11 @@ int main(void) {
         }
 #endif
 
-        /* Log the original message */
+        /* Log + save history */
         char ts[16];
         timestamp_now(ts, sizeof(ts));
         log_message("%s You: %s (seq #%d)", ts, line, seq);
+        save_history("YOU", seq, line);
     }
 
     /* wait for threads */
