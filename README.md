@@ -10,26 +10,36 @@ This repository contains a **cross-platform P2P Encrypted Chat System** implemen
 * LAN IP detection for easy connection
 * Latency measurement and performance monitoring
 * Thread-safe logging of chat messages
+* **Message history** saved to a file (`../logs/chat_history.txt`)
+* **File transfer** support using `/sendfile <filename>`
 
 ---
 
 ## **Project Structure**
+
 ```
 p2p-chat-system/
 │
 ├── src/
-│    ├── p2pchat.c # Main program: server/client flow, threads, and I/O
-│    ├── encryption.c # AES encryption/decryption functions
-│    ├── encryption.h # Header for encryption functions
-│    ├── utils.c # Utility functions (logging, performance tracking, parsing)
-│    └── utils.h # Header for utility functions
+│    ├── p2pchat.c       # Main program: server/client flow, threads, and I/O
+│    ├── encryption.c    # AES encryption/decryption functions
+│    ├── encryption.h    # Header for encryption functions
+│    ├── udp_chat.c # UDP chat implementation
+│    ├── udp_chat.h # Header for UDP chat
+│    ├── utils.c         # Utility functions (logging, performance tracking, parsing)
+│    └── utils.h         # Header for utility functions
 │
-├── logs/ # Automatically created at runtime
-│    └── chatlog.txt # Thread-safe log of all messages
+├── downloads/           # Automatically created when receiving files
+│    └── <received files> # All incoming files saved here
 │
-├── README.md # Project documentation (this file)
-└── .gitignore # Ignore build outputs and logs
+├── logs/                # Automatically created at runtime
+│    ├── chatlog.txt      # Thread-safe log of all messages
+│    └── chat_history.txt # Saved message history
+│
+├── README.md            # Project documentation (this file)
+└── .gitignore           # Ignore build outputs and logs
 ```
+
 ---
 
 ## **Prerequisites**
@@ -37,16 +47,17 @@ p2p-chat-system/
 * **GCC (MinGW-w64)** for Windows or Linux/macOS
   Check installation:
 
-  ```bash
-  gcc --version
-  ```
+```bash
+gcc --version
+```
+
 * **OpenSSL library** (for AES encryption)
   Install on Linux/macOS:
 
-  ```bash
-  sudo apt install libssl-dev   # Debian/Ubuntu
-  brew install openssl          # macOS
-  ```
+```bash
+sudo apt install libssl-dev   # Debian/Ubuntu
+brew install openssl          # macOS
+```
 
 ---
 
@@ -92,17 +103,22 @@ p2pchat.exe      # Windows
 
 ---
 
-## **Commands During Chat**
+## **Chat Commands**
 
 * `stats` — Show current latency/performance statistics
 * `reset` — Reset performance statistics
+* `/history` — Display saved chat history
+* `/sendfile <filename>` — Send a file to the connected peer
+
+  * All received files are automatically saved under `../downloads/`
 
 ---
 
-## **Logging**
+## **Logging & History**
 
-* Chat messages are logged in `../logs/chatlog.txt`
-* Logging is **thread-safe** and includes timestamps.
+* **Thread-safe logging** of all messages is in `../logs/chatlog.txt`.
+* **Message history** is saved in `../logs/chat_history.txt` and can be viewed during chat with `/history`.
+* Received files are stored in `../downloads/` automatically.
 
 ---
 
@@ -111,10 +127,10 @@ p2pchat.exe      # Windows
 * Ensure both peers are on the **same LAN** for easy connection.
 * This version removes the need to hardcode IPs — LAN IP detection is automatic.
 * For testing on the same machine, you can use `127.0.0.1` as server IP.
+* File transfer works for **any file type**. Large files are sent in encrypted chunks.
 
 ---
 
 ## **License**
 
 This project is MIT licensed. See `LICENSE` file for details.
-
