@@ -1,20 +1,14 @@
 /*
- * p2pchat.c — Cross-platform P2P chat (Day 1 parity with your Python script)
+ * p2pchat.c — Cross-platform P2P chat with Encryption + Performance Monitor
  *
  * Save as: p2pchat.c
- * Build (Linux/macOS): gcc -pthread p2pchat.c -o p2pchat
- * Build (Windows MinGW): gcc p2pchat.c -o p2pchat.exe -lws2_32
- *
- * Logs -> ../logs/chatlog.txt  (relative to src/)
+ * Build (Linux/macOS): gcc -pthread p2pchat.c encryption.c utils.c -o p2pchat -lcrypto -lssl
+ * Build (Windows MinGW): gcc p2pchat.c encryption.c utils.c -o p2pchat.exe -lws2_32 -lcrypto -lssl
  *
  * Features:
- *  - server/client selection
- *  - TCP sockets
- *  - concurrent send/receive
- *  - timestamps [HH:MM:SS]
- *  - thread-safe logging to ../logs/chatlog.txt
- *  - IP/port validation
- *  - graceful shutdown on Ctrl+C and on peer disconnect
+ *  - Part 1: Core TCP socket communication (server/client)
+ *  - Part 2: AES-256-CBC encryption with password
+ *  - Part 3: Latency measurement and performance monitoring
  */
 
 #define _CRT_SECURE_NO_WARNINGS
@@ -25,16 +19,16 @@
 #include <stdarg.h>
 #include <time.h>
 #include "encryption.h"
+#include "utils.h"
+
 const char *SECRET_KEY = "admin123";
-
-
 
 #ifdef _WIN32
   /* Windows */
   #include <winsock2.h>
   #include <ws2tcpip.h>
   #include <windows.h>
-  #include <direct.h> /* _mkdir */
+  #include <direct.h>
   typedef SOCKET sock_t;
   #define sock_invalid INVALID_SOCKET
   #define close_socket(s) closesocket(s)
@@ -66,6 +60,7 @@ const char *SECRET_KEY = "admin123";
 
 static volatile int running = 1;
 static sock_t conn_sock = sock_invalid;
+static unsigned char derived_key[ENC_KEY_LEN];
 
 /* Cross-platform thread & mutex types */
 #ifdef _WIN32
@@ -155,7 +150,6 @@ static void timestamp_now(char *out, size_t out_sz) {
 
 /* ensure logs dir exists */
 static void ensure_logs_dir(void) {
-    /* attempt create - ignore errors if exists */
     mkdir_path(LOG_DIR);
 }
 
@@ -165,7 +159,6 @@ static void log_message(const char *fmt, ...) {
     mutex_lock(&log_mutex);
     FILE *f = fopen(LOG_FILE, "a");
     if (!f) {
-        /* if log open fails still unlock and print to stderr */
         perror("[ERROR] fopen log");
         mutex_unlock(&log_mutex);
         return;
@@ -277,7 +270,7 @@ static sock_t start_server(int port) {
     inet_ntop(AF_INET, &cli.sin_addr, ipstr, sizeof(ipstr));
     printf("[CONNECTED] Peer connected from %s:%d\n", ipstr, ntohs(cli.sin_port));
 #ifdef _WIN32
-    closesocket(s); /* close listening socket */
+    closesocket(s);
 #else
     close(s);
 #endif
@@ -349,7 +342,7 @@ static sock_t start_client(const char *peer_ip, int peer_port) {
 #endif
         if (n == 0) {
             printf("\n[INFO] Connection closed by peer.\n");
-            log_message("[%s] Peer disconnected.", /* dummy TS handled below */ "");
+            log_message("Peer disconnected.");
             running = 0;
             break;
         } else if (n < 0) {
@@ -364,21 +357,67 @@ static sock_t start_client(const char *peer_ip, int peer_port) {
             running = 0;
             break;
         }
+
+        /* Decrypt message */
         unsigned char decrypted[RECV_BUF];
-        int dec_len = decrypt_message((unsigned char*)buf, n, (unsigned char*)SECRET_KEY, decrypted, RECV_BUF);
+        int dec_len = decrypt_message((unsigned char*)buf, n, derived_key, 
+                                     decrypted, RECV_BUF);
         if (dec_len < 0) {
             fprintf(stderr, "[ERROR] Failed to decrypt message.\n");
             continue;
         }
 
-        // Null-terminate for printing
         decrypted[dec_len] = '\0';
+        
+        /* Parse message for performance tracking */
+        char clean_message[RECV_BUF];
+        uint32_t sequence = 0;
+        int is_tracked = perf_parse_message((char*)decrypted, clean_message, 
+                                           sizeof(clean_message), &sequence);
+        
+        /* Check if this is an ACK message */
+        int ack_result = perf_handle_ack(clean_message);
+        if (ack_result >= 0) {
+            /* This was an ACK, don't display as regular message */
+            continue;
+        }
+        
+        /* Display regular message */
         char ts[16];
         timestamp_now(ts, sizeof(ts));
-        printf("\n%s Peer: %s\n", ts, decrypted);
-        log_message("%s Peer: %s", ts, decrypted);
+        printf("\n%s Peer: %s\n", ts, clean_message);
+        log_message("%s Peer: %s", ts, clean_message);
+        
+        /* Send ACK if this was a tracked message */
+        if (is_tracked && sequence > 0) {
+            perf_send_ack(conn_sock, sequence, derived_key);
+        }
+        
         printf("You: ");
         fflush(stdout);
+        
+        /* Auto-display stats every 10 messages */
+        perf_auto_display_stats(STATS_DISPLAY_INTERVAL);
+    }
+    
+#ifdef _WIN32
+    return 0;
+#else
+    return NULL;
+#endif
+}
+
+/* ---------- cleanup thread ---------- */
+#ifdef _WIN32
+  DWORD WINAPI cleanup_fn(LPVOID arg)
+#else
+  void *cleanup_fn(void *arg)
+#endif
+{
+    (void)arg;
+    while (running) {
+        sleep_ms(5000); /* Check every 5 seconds */
+        perf_cleanup_expired(DEFAULT_TIMEOUT_MS);
     }
 #ifdef _WIN32
     return 0;
@@ -392,25 +431,28 @@ static sock_t start_client(const char *peer_ip, int peer_port) {
 #ifdef _WIN32
 static BOOL WINAPI console_handler(DWORD signal) {
     if (signal == CTRL_C_EVENT) {
+        printf("\n=== Final Statistics ===\n");
+        perf_display_stats();
         running = 0;
         if (conn_sock != sock_invalid) closesocket(conn_sock);
-        printf("\n[INFO] Shutting down...\n");
+        printf("[INFO] Shutting down...\n");
     }
     return TRUE;
 }
 #else
 static void sigint_handler(int signum) {
     (void)signum;
+    printf("\n=== Final Statistics ===\n");
+    perf_display_stats();
     running = 0;
     if (conn_sock != sock_invalid) close(conn_sock);
-    printf("\n[INFO] Shutting down...\n");
+    printf("[INFO] Shutting down...\n");
 }
 #endif
 
-/* ---------- main flow (mimic Python) ---------- */
+/* ---------- main flow ---------- */
 
 int main(void) {
-    /* Winsock init if needed */
 #ifdef _WIN32
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2,2), &wsa) != 0) {
@@ -420,8 +462,11 @@ int main(void) {
 #endif
 
     mutex_init(&log_mutex);
+    perf_init(); /* Initialize performance monitoring */
+    
+    /* Derive key from password */
+    derive_key_from_password(SECRET_KEY, derived_key);
 
-    /* Console signal handler */
 #ifdef _WIN32
     SetConsoleCtrlHandler(console_handler, TRUE);
 #else
@@ -432,7 +477,9 @@ int main(void) {
     sigaction(SIGINT, &sa, NULL);
 #endif
 
-    printf("=== P2P Chat System ===\n");
+    printf("=== P2P Chat System with Performance Monitor ===\n");
+    printf("Features: Encryption + Latency Tracking + Statistics\n");
+    printf("Commands: 'stats' = show stats, 'reset' = reset stats\n");
     printf("Start as (server/client)? ");
     fflush(stdout);
 
@@ -460,38 +507,66 @@ int main(void) {
         if (conn_sock == sock_invalid) goto cleanup;
 
     } else {
-        char ip[64], port_s[32];
-        printf("Enter peer IP address: ");
-        fflush(stdout);
-        if (!fgets(ip, sizeof(ip), stdin)) goto cleanup;
-        trim_newline(ip);
-        if (!validate_ip(ip)) {
-            fprintf(stderr, "[ERROR] Invalid IP address format.\n");
+        /* Auto client mode: detect own device IP and connect to localhost */
+        char hostbuffer[256];
+        char *IPbuffer;
+        struct hostent *host_entry;
+
+        /* Get and display own IP */
+        if (gethostname(hostbuffer, sizeof(hostbuffer)) == -1) {
+            perror("[ERROR] gethostname failed");
             goto cleanup;
         }
-        printf("Enter peer port: ");
+        host_entry = gethostbyname(hostbuffer);
+        if (host_entry == NULL) {
+            perror("[ERROR] gethostbyname failed");
+            goto cleanup;
+        }
+        IPbuffer = inet_ntoa(*((struct in_addr*) host_entry->h_addr_list[0]));
+        printf("[INFO] This device IP: %s\n", IPbuffer);
+
+        /* Ask user for server port */
+        char port_s[16];
+        int port = 0;
+        printf("Enter server port: ");
         fflush(stdout);
         if (!fgets(port_s, sizeof(port_s), stdin)) goto cleanup;
         trim_newline(port_s);
-        int port = 0;
         if (!parse_port(port_s, &port)) {
-            fprintf(stderr, "[ERROR] Invalid port. Must be between 1 and 65535.\n");
+            fprintf(stderr, "[ERROR] Invalid port number.\n");
             goto cleanup;
         }
-        conn_sock = start_client(ip, port);
+
+        /* Always use localhost */
+        const char *server_ip = "127.0.0.1";
+        printf("[INFO] Connecting to server at %s:%d\n", server_ip, port);
+        conn_sock = start_client(server_ip, port);
         if (conn_sock == sock_invalid) goto cleanup;
     }
 
+
+
+    printf("\n[INFO] Performance monitoring enabled!\n");
+    printf("[INFO] Your messages will be tracked for latency measurement.\n");
+    printf("[INFO] Type 'stats' to view performance statistics.\n");
+    printf("[INFO] Type 'reset' to reset statistics.\n\n");
+
     /* start receiver thread */
-#ifdef _WIN32
     thread_t rx = start_thread(receiver_fn, NULL);
+#ifdef _WIN32
     if (!rx) {
         fprintf(stderr, "[ERROR] CreateThread failed.\n");
         goto cleanup;
     }
-#else
-    thread_t rx = start_thread(receiver_fn, NULL);
-    /* pthread_create returns non-zero on error; we ignore check here because start_thread wraps it */
+#endif
+
+    /* start cleanup thread */
+    thread_t cleanup_th = start_thread(cleanup_fn, NULL);
+#ifdef _WIN32
+    if (!cleanup_th) {
+        fprintf(stderr, "[ERROR] CreateThread (cleanup) failed.\n");
+        goto cleanup;
+    }
 #endif
 
     /* sender loop */
@@ -501,7 +576,6 @@ int main(void) {
         fflush(stdout);
 
         if (!fgets(line, sizeof(line), stdin)) {
-            /* EOF */
             running = 0;
             break;
         }
@@ -513,43 +587,60 @@ int main(void) {
             continue;
         }
 
-        // Encrypt before sending
+        /* Handle special commands */
+        if (strcmp(line, "stats") == 0) {
+            perf_display_stats();
+            continue;
+        }
+        if (strcmp(line, "reset") == 0) {
+            perf_reset_stats();
+            continue;
+        }
+
+        /* Format message with sequence number for tracking */
+        char formatted_msg[SEND_BUF];
+        int seq = perf_format_message(formatted_msg, sizeof(formatted_msg), line);
+        if (seq < 0) {
+            fprintf(stderr, "[ERROR] Message too long.\n");
+            continue;
+        }
+
+        /* Encrypt the formatted message */
         unsigned char encrypted[SEND_BUF];
-        int enc_len = encrypt_message((unsigned char*)line, strlen(line), 
-                                    (unsigned char*)SECRET_KEY, encrypted, SEND_BUF);
+        int enc_len = encrypt_message((unsigned char*)formatted_msg, 
+                                     strlen(formatted_msg), derived_key, 
+                                     encrypted, SEND_BUF);
         if (enc_len < 0) {
             fprintf(stderr, "[ERROR] Failed to encrypt message.\n");
             continue;
         }
 
-        printf("Encrypted bytes: ");
-        for (int i = 0; i < enc_len; i++)
-            printf("%02X ", encrypted[i]);
-        printf("\n");
+        /* Send encrypted message */
+#ifdef _WIN32
+        int sent = send(conn_sock, (const char*)encrypted, enc_len, 0);
+        if (sent == SOCKET_ERROR) {
+            fprintf(stderr, "\n[ERROR] send: %d\n", WSAGetLastError());
+            running = 0;
+            break;
+        }
+#else
+        ssize_t sent = send(conn_sock, (const char*)encrypted, enc_len, 0);
+        if (sent < 0) {
+            perror("\n[ERROR] send");
+            running = 0;
+            break;
+        }
+#endif
 
-        #ifdef _WIN32
-            int sent = send(conn_sock, (const char*)encrypted, enc_len, 0);
-            if (sent == SOCKET_ERROR) {
-                fprintf(stderr, "\n[ERROR] send: %d\n", WSAGetLastError());
-                running = 0;
-                break;
-            }
-        #else
-            ssize_t sent = send(conn_sock, (const char*)encrypted, enc_len, 0);
-            if (sent < 0) {
-                perror("\n[ERROR] send");
-                running = 0;
-                break;
-            }
-        #endif
+        /* Log the original message */
         char ts[16];
         timestamp_now(ts, sizeof(ts));
-        log_message("%s You: %s", ts, line);
+        log_message("%s You: %s (seq #%d)", ts, line, seq);
     }
 
-
-    /* wait for receiver thread */
+    /* wait for threads */
     join_thread(rx);
+    join_thread(cleanup_th);
 
 cleanup:
     if (conn_sock != sock_invalid) {
@@ -561,6 +652,10 @@ cleanup:
         close(conn_sock);
 #endif
     }
+
+    /* Display final stats */
+    printf("\n=== Final Performance Report ===\n");
+    perf_display_stats();
 
 #ifdef _WIN32
     WSACleanup();
