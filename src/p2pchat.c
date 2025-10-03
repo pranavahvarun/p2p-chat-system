@@ -200,6 +200,25 @@ static int validate_ip(const char *ip) {
     return inet_pton(AF_INET, ip, &addr) == 1;
 }
 
+/* Get local LAN IP (IPv4) */
+static void get_local_ip(char *buffer, size_t buflen) {
+    char host[256];
+    if (gethostname(host, sizeof(host)) == -1) {
+        strncpy(buffer, "Unknown", buflen);
+        return;
+    }
+
+    struct hostent *host_entry = gethostbyname(host);
+    if (!host_entry) {
+        strncpy(buffer, "Unknown", buflen);
+        return;
+    }
+
+    const char *ip = inet_ntoa(*(struct in_addr*)host_entry->h_addr_list[0]);
+    strncpy(buffer, ip, buflen);
+}
+
+
 /* ---------- networking helpers ---------- */
 
 static sock_t start_server(int port) {
@@ -249,8 +268,13 @@ static sock_t start_server(int port) {
         return sock_invalid;
     }
 
+    char local_ip[64];
+    get_local_ip(local_ip, sizeof(local_ip));
+    printf("[INFO] Server started.\n");
+    printf("[INFO] Your LAN IP: %s\n", local_ip);
     printf("[INFO] Waiting for peer to connect on port %d...\n", port);
     fflush(stdout);
+
 
     struct sockaddr_in cli;
     socklen_t len = sizeof(cli);
@@ -537,8 +561,19 @@ int main(void) {
             goto cleanup;
         }
 
-        /* Always use localhost */
-        const char *server_ip = "127.0.0.1";
+        /* Ask user for server IP */
+        char ip_input[64];
+        printf("Enter server IP (LAN): ");
+        fflush(stdout);
+        if (!fgets(ip_input, sizeof(ip_input), stdin)) goto cleanup;
+        trim_newline(ip_input);
+
+        if (!validate_ip(ip_input)) {
+            fprintf(stderr, "[ERROR] Invalid IP format.\n");
+            goto cleanup;
+        }
+
+        const char *server_ip = ip_input;
         printf("[INFO] Connecting to server at %s:%d\n", server_ip, port);
         conn_sock = start_client(server_ip, port);
         if (conn_sock == sock_invalid) goto cleanup;
